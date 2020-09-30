@@ -10,7 +10,7 @@ from semantictags import models as semantictags
 class Genre(models.Model):
     name = sharedstrings.SharedStringField()
     decription= models.CharField(max_length=128)
-    parent = models.ForeignKey("self",null=True,blank=True,on_delete=models.DO_NOTHING)
+    parent = models.ForeignKey("self",null=True,blank=True,on_delete=models.PROTECT)
     def __str__(self):
         return '{}'.format(self.name)
     class Meta:
@@ -19,13 +19,13 @@ class Genre(models.Model):
 class Company(semantictags.Taggable):
     id = models.AutoField(primary_key=True)
     name=sharedstrings.SharedStringField()
-    # name = models.ForeignKey("sharedstrings.Strings",related_name="+",on_delete=models.DO_NOTHING)
-    case_sensitive_name = models.BooleanField()
+    # name = models.ForeignKey("sharedstrings.Strings",related_name="+",on_delete=models.PROTECT)
+    case_sensitive_name = models.BooleanField(null=False,blank=False,default=False)
 
-    parent=models.ForeignKey("self",on_delete=models.DO_NOTHING,null=True,blank=True,related_name="children")
-    website = models.ForeignKey("retconpeople.Website",on_delete=models.DO_NOTHING,null=True,blank=True)
+    parent=models.ForeignKey("self",on_delete=models.PROTECT,null=True,blank=True,related_name="children")
+    website = models.ForeignKey("retconpeople.Website",on_delete=models.PROTECT,null=True,blank=True)
     defunct = models.BooleanField(null=True,blank=True)
-    external_representation= models.ManyToManyField("remotables.ContentResource",related_name="+",blank=True)
+    external_representations= models.ManyToManyField("remotables.ContentResource",related_name="+",blank=True)
 
     def __str__(self):
         return self.name.name
@@ -62,7 +62,7 @@ class CreativeWork(semantictags.Taggable):
     created_by = models.ForeignKey("retconpeople.Person",on_delete=models.PROTECT,null=True,blank=True,related_name="+")
     # representes_collections = models.ManyToManyField('retconstorage.Collection')
     # representes_remotables = models.ManyToManyField('retconremotables.RemoteEntity')
-    external_representation= models.ManyToManyField("remotables.ContentResource",related_name="+",blank=True)
+    external_representations= models.ManyToManyField("remotables.ContentResource",related_name="+",blank=True)
     files= models.ManyToManyField("retconstorage.ManagedFile",related_name="+",blank=True)
 
     def local_name(self,language=django.utils.translation.get_language()):
@@ -152,6 +152,19 @@ class Series(CreativeWork):
         else:
             return "{}(Unknown Year)".format(self.preferred_name(),)
     
+    def save(self, *args, **kwargs):
+
+        #check for cycles
+        cur=self
+        while cur.parent_series_id is not None:
+            if cur.parent_series_id == self.id: #This is intentionally lazy so we don't have to join
+                raise django.db.IntegrityError("A series parent chain may not form a cycle.")
+            cur=cur.parent_series
+
+        #only reached on no cycle
+        super().save(*args, **kwargs)  # Call the "real" save() method.
+
+
     class Meta:
         verbose_name_plural = "series"
 
@@ -161,8 +174,8 @@ class RelatedSeries(models.Model):
         (1,'spinoff'),
         (2,'sequel')
     )
-    to_series=models.ForeignKey("Series",on_delete=models.DO_NOTHING)
-    from_series=models.ForeignKey("Series",related_name='based_off',on_delete=models.DO_NOTHING)
+    to_series=models.ForeignKey("Series",on_delete=models.PROTECT)
+    from_series=models.ForeignKey("Series",related_name='based_off',on_delete=models.PROTECT)
     relationship=models.PositiveSmallIntegerField(choices=RELATIONS,help_text='e.g. <to_work> is a sequel to <from_work>')    
 
 
@@ -198,7 +211,7 @@ class Episode(CreativeWork):
     #End mediums
 
 
-    part_of=models.ForeignKey("Series",on_delete=models.DO_NOTHING,null=True,blank=True)
+    part_of=models.ForeignKey("Series",on_delete=models.PROTECT,null=True,blank=True,related_name='episodes')
     order_in_series=models.PositiveSmallIntegerField(null=True,blank=True)
     description = models.TextField(null=True,blank=True)
     medium= models.PositiveSmallIntegerField(choices=MEDIUM_CHOICES)
@@ -212,8 +225,21 @@ class Episode(CreativeWork):
     def __str__(self):
         return self.preferred_name()
 
-class Book(Episode):
+#TODO MIGRATE MEDIUMS TO SUBTYPES
+class Recording(Episode):
+    production_number=models.IntegerField(null=True,blank=True)
+
+class Writing(Episode):
     authors = models.ManyToManyField('retconpeople.Person')
+    class Meta:
+        abstract=True
+
+class Book(Writing):
+    pass
+
+class Software(Episode):
+    SFT_PLATFORM_HELP='Platforms this sofware runs on including consoles and operating systems'
+    platforms= models.ManyToManyField('self',blank=True,related_name='+',help_text=SFT_PLATFORM_HELP)
     pass
 
 class Illustration(CreativeWork):
@@ -223,7 +249,7 @@ class Comicbook(Book):
     pass
 
 class AudioBook(CreativeWork):
-    reading_of=models.ForeignKey("Book",on_delete=models.DO_NOTHING)
+    reading_of=models.ForeignKey("Book",on_delete=models.PROTECT)
 
 class MovieManager(models.Manager):
     def get_queryset(self):
@@ -231,8 +257,10 @@ class MovieManager(models.Manager):
             medium=Episode.MOVIE)
 
 class Movie(Episode):
-    medium=Episode.MOVIE
     objects=MovieManager()
+    def __init__(self,*args,**kwargs):
+        kwargs['medium']=Episode.MOVIE
+        super().__init__(*args,**kwargs)
     class Meta:
         proxy=True
 
@@ -240,12 +268,8 @@ class TVEpisode(Episode):
     class Meta:
         proxy=True
 
-class Software(Episode):
-    SFT_PLATFORM_HELP='Platforms this sofware runs on including consoles and operating systems'
-    platforms= models.ManyToManyField('self',blank=True,related_name='+',help_text=SFT_PLATFORM_HELP)
-    pass
 
-class WebVideo(Episode):
+class WebVideo(Recording):
     pass
 
 class Franchise(models.Model):

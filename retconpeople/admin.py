@@ -10,7 +10,7 @@ def merge_people(modeladmin, request, queryset):
 merge_people.short_description = "Combine aliased people into the oldest one."
 
 class ExternalPersonContentInline(admin.TabularInline):
-    model=Person.external_representation.through
+    model=Person.external_representations.through
     extra=1
     verbose_name="External URL"
     verbose_name_plural="External URLs"
@@ -31,7 +31,7 @@ class UrlPatternInline(admin.TabularInline):
 
 @admin.register(Person)
 class PersonAdmin(admin.ModelAdmin):
-    exclude=("external_representation",)
+    exclude=("external_representations",)
     search_fields=['first_name','last_name','pseudonyms']
     list_display=["id","formatted_name","description","wanted_id_count"]
     list_filter=[]
@@ -49,7 +49,7 @@ class PersonAdmin(admin.ModelAdmin):
             return (Person.objects.all(),True)
         try:
             id=int(search_term)
-            q=Q(id=id)|Q(pseudonyms__name__icontains=search_term)|Q(usernames__name__name__istartswith=search_term)
+            q=Q(id=id)|Q(pseudonyms__name__icontains=search_term)|Q(usernames__name__name__istartswith=search_term)|Q(user_numbers__number=search_term)
             return (Person.objects.filter(q),True)
         except:
             pass
@@ -71,7 +71,10 @@ class WebsiteAdmin(admin.ModelAdmin):
     exclude=["user_id_patterns"]
     ordering=['domain']
     inlines=[UrlPatternInline]
-    pass
+    
+    def get_search_results(self, request, queryset, search_term):
+        queryset.filter(user_id_format_string__isnull=False)
+        return super().get_search_results(request, queryset, search_term)
 
     
 # Handled by inlines, reinstate if new fields render it necessary to have these as an admin panel.
